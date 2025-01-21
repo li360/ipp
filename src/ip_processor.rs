@@ -55,6 +55,19 @@ impl IpProcessor {
         // Try parsing as IP range
         if let Some((start, end)) = input.split_once('-') {
             let start_ip = IpAddr::from_str(start.trim())?;
+            
+            // Handle short form (e.g. 192.168.1.1-10)
+            if let Ok(end_num) = end.trim().parse::<u8>() {
+                let mut octets = match start_ip {
+                    IpAddr::V4(v4) => v4.octets(),
+                    _ => return Err(IpProcessorError::InvalidInput),
+                };
+                octets[3] = end_num;
+                let end_ip = IpAddr::from(octets);
+                return Ok(IpInput::Range((start_ip, end_ip)));
+            }
+            
+            // Handle full IP format
             let end_ip = IpAddr::from_str(end.trim())?;
             return Ok(IpInput::Range((start_ip, end_ip)));
         }

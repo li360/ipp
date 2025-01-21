@@ -1,8 +1,12 @@
 use clap::Parser;
 
 #[derive(Parser, Debug)]
-#[command(name = "ipp", version = "0.1.0")]
-#[command(about = "IP地址处理工具", long_about = None)]
+#[command(name = "ipp", version = env!("CARGO_PKG_VERSION"))]
+#[command(about = "IP地址处理工具", long_about = "支持以下IP格式：
+  1. 单个IP：192.168.1.1
+  2. CIDR格式：192.168.1.0/24
+  3. IP范围：192.168.1.1-10
+  4. 本地IP：不指定输入时自动获取")]
 pub struct Cli {
     /// 输入IP地址（单个IP、CIDR或范围）
     #[arg(required = false)]

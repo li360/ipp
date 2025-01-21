@@ -84,9 +84,9 @@ async fn main() {
             // 对于单个IP，使用默认/24子网
             ExternalIpNetwork::new(*ip, 24).unwrap()
         }
-        IpInput::Range(_) => {
-            eprintln!("{}", "范围IP地址需要指定CIDR格式".red());
-            process::exit(1);
+        IpInput::Range((start, _)) => {
+            // 对于范围IP，使用起始IP的/24子网
+            ExternalIpNetwork::new(*start, 24).unwrap()
         }
     };
 

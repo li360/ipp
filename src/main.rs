@@ -7,6 +7,7 @@ pub mod ip_processor;
 use clap::Parser;
 use cli::Cli;
 use colored::*;
+use std::io::{stdout, IsTerminal};
 use ip_processor::{IpProcessor, IpInput};
 use ipnetwork::IpNetwork as ExternalIpNetwork;
 use local_ip_address::Error as LocalIpError;
@@ -119,7 +120,11 @@ async fn main() {
                 if count % args.width == 0 && count != 0 {
                     println!();
                 }
-                print!("{} ", ip.to_string().green());
+                if stdout().is_terminal() {
+                    print!("{} ", ip.to_string().green());
+                } else {
+                    print!("{} ", ip);
+                }
                 count += 1;
             }
         } else {
@@ -128,7 +133,13 @@ async fn main() {
                 println!();
             }
             match result {
-                Some(_) => print!("{} ", ip.to_string().green()),
+                Some(_) => {
+                    if stdout().is_terminal() {
+                        print!("{} ", ip.to_string().green());
+                    } else {
+                        print!("{} ", ip);
+                    }
+                },
                 None => print!("{} ", ip),
             }
             count += 1;

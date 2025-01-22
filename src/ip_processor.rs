@@ -154,10 +154,11 @@ impl IpProcessor {
         }
     }
 
-    pub fn check_port(ip: IpAddr, port: u16, timeout: Duration) -> bool {
+    pub fn check_port(ip: IpAddr, port: u16, timeout: Duration) -> Option<u64> {
+        let start = std::time::Instant::now();
         match TcpStream::connect_timeout(&(ip, port).into(), timeout) {
-            Ok(_) => true,
-            Err(_) => false,
+            Ok(_) => Some(start.elapsed().as_millis() as u64),
+            Err(_) => None,
         }
     }
 

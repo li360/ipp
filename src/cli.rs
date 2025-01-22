@@ -6,7 +6,12 @@ use clap::Parser;
   1. 单个IP：192.168.1.1
   2. CIDR格式：192.168.1.0/24
   3. IP范围：192.168.1.1-10
-  4. 本地IP：不指定输入时自动获取")]
+  4. 本地IP：不指定输入时自动获取
+
+新增功能：
+  - 延迟图表显示（-s模式下）
+  - 端口测试统计和平均延迟计算
+  - 自定义端口测试次数（-c参数）")]
 pub struct Cli {
     /// 输入IP地址（单个IP、CIDR或范围）
     #[arg(required = false)]
@@ -44,7 +49,11 @@ pub struct Cli {
     #[arg(short = 'o', long = "timeout", default_value_t = 1000)]
     pub timeout: u64,
 
-    /// 使用端口检测代替ping测试（支持逗号分隔的多个端口，如80,443）
+    /// 端口测试次数
+    #[arg(short = 'c', long = "count", default_value_t = 10)]
+    pub port_test_count: u32,
+
+    /// 使用端口检测代替ping测试（支持逗号分隔的多个端口，如80,443,8080）
     #[arg(short = 'p', long = "port")]
     pub port: Option<String>,
 

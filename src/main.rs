@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::sync::Arc;
 
+pub mod chart;
 pub mod cli;
 pub mod ip_processor;
 
@@ -12,7 +13,6 @@ use ipnetwork::IpNetwork as ExternalIpNetwork;
 use local_ip_address::Error as LocalIpError;
 use std::clone::Clone;
 use std::io::{stdout, IsTerminal};
-use surge_ping::Pinger;
 
 // 定义IP处理器错误类型
 #[derive(Debug)]
@@ -130,37 +130,70 @@ async fn main() {
 
             let mut port_status = Vec::new();
             for port in ports {
-                match tokio::time::timeout(
-                    Duration::from_millis(args.timeout),
-                    tokio::net::TcpStream::connect((ip, port)),
-                )
-                .await
-                {
-                    Ok(Ok(_)) => {
-                        println!("{}", format!("端口 {} 开放", port).green());
-                        port_status.push(Some(port));
+            let mut total_latency = 0;
+            let mut success_count = 0;
+            
+            for _i in 0..args.port_test_count {
+                let latency = IpProcessor::check_port(
+                    ip,
+                    port,
+                    Duration::from_millis(args.timeout)
+                );
+                
+                    if let Some(latency_ms) = latency {
+                        total_latency += latency_ms;
+                        success_count += 1;
+                        let chart = chart::LatencyChart::new(1000);
+                        println!(
+                            " {}",
+                            chart.draw(Some(latency_ms))
+                        );
+                    } else {
+                        let chart = chart::LatencyChart::new(1000);
+                        println!(
+                            " {}",
+                            chart.draw(None)
+                        );
                     }
-                    _ => {
-                        println!("{}", format!("端口 {} 关闭", port).red());
-                        port_status.push(None);
-                    }
-                }
+                std::thread::sleep(Duration::from_millis(500)); // 添加500ms延迟
+            }
+            
+            if success_count > 0 {
+                let avg_latency = total_latency / success_count;
+                println!(
+                    "端口 {} 平均延迟: {}ms (成功次数: {}/{})",
+                    port.to_string().green(),
+                    avg_latency,
+                    success_count,
+                    args.port_test_count
+                );
+                port_status.push(Some(port));
+            } else {
+                println!(
+                    "端口 {} 所有测试均失败",
+                    port.to_string().red()
+                );
+                port_status.push(None);
+            }
             }
             vec![(ip, port_status)]
         } else {
             // 没有指定端口时进行ping测试
             println!("测试单个IP地址: {}", ip);
             let mut all_timeout = true;
-            for _i in 0..10 {
-                match IpProcessor::single_ip_test_once(ip, Duration::from_millis(args.timeout))
-                    .await
-                {
-                    Ok(result) if result > 0 => {
+            for _i in 0..args.port_test_count {
+                let result = IpProcessor::single_ip_test_once(ip, Duration::from_millis(args.timeout)).await;
+                
+                // 初始化图表
+                let chart = chart::LatencyChart::new(1000); // 最大延迟1秒
+                
+                match result {
+                    Ok(latency) if latency > 0 => {
                         all_timeout = false;
-                        println!("{}", format!("{:4}ms", result).green());
+                        println!("{}", chart.draw(Some(latency)));
                     }
                     _ => {
-                        println!("{}", "超时".red());
+                        println!("{}", chart.draw(None));
                     }
                 }
                 std::thread::sleep(Duration::from_millis(500)); // 添加500ms延迟
@@ -325,7 +358,6 @@ async fn perform_port_tests(
 ) -> Vec<(IpAddr, Vec<Option<u16>>)> {
     use futures::stream::StreamExt;
     use tokio::sync::Semaphore;
-    use tokio::time::Duration;
 
     let semaphore = Arc::new(Semaphore::new(threads));
     let mut results = Vec::with_capacity(ips.len());
@@ -368,15 +400,30 @@ async fn test_ports(ip: IpAddr, ports: &Arc<Vec<u16>>, timeout: u64) -> Vec<Opti
         let ip = ip.clone();
         let port = *port;
         let handle = tokio::spawn(async move {
-            match tokio::time::timeout(
-                Duration::from_millis(timeout),
-                tokio::net::TcpStream::connect((ip, port)),
-            )
-            .await
-            {
-                Ok(Ok(_)) => Some(port),
-                _ => None,
-            }
+            let latency = IpProcessor::check_port(
+                ip, 
+                port, 
+                Duration::from_millis(timeout)
+            );
+            
+                    if let Some(latency_ms) = latency {
+                        let chart = chart::LatencyChart::new(1000);
+                        println!(
+                            "{} 端口 {} 开放 (延迟: {}ms)",
+                            chart.draw(Some(latency_ms)),
+                            port.to_string().green(),
+                            latency_ms
+                        );
+                        Some(port)
+                    } else {
+                        let chart = chart::LatencyChart::new(1000);
+                        println!(
+                            "{} 端口 {} 关闭",
+                            chart.draw(None),
+                            port.to_string().red()
+                        );
+                        None
+                    }
         });
         handles.push(handle);
     }

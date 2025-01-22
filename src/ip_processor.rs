@@ -1,12 +1,13 @@
 use ipnetwork::{IpNetwork as ExternalIpNetwork, IpNetworkError};
+use rand;
 use std::net::{IpAddr, TcpStream};
 use std::str::FromStr;
 use std::time::Duration;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum IpInput {
-    Single(IpAddr),
     Cidr(ExternalIpNetwork),
+    Single(IpAddr),
     Range((IpAddr, IpAddr)),
 }
 
@@ -55,7 +56,7 @@ impl IpProcessor {
         // Try parsing as IP range
         if let Some((start, end)) = input.split_once('-') {
             let start_ip = IpAddr::from_str(start.trim())?;
-            
+
             // Handle short form (e.g. 192.168.1.1-10)
             if let Ok(end_num) = end.trim().parse::<u8>() {
                 let mut octets = match start_ip {
@@ -66,7 +67,7 @@ impl IpProcessor {
                 let end_ip = IpAddr::from(octets);
                 return Ok(IpInput::Range((start_ip, end_ip)));
             }
-            
+
             // Handle full IP format
             let end_ip = IpAddr::from_str(end.trim())?;
             return Ok(IpInput::Range((start_ip, end_ip)));
@@ -80,19 +81,11 @@ impl IpProcessor {
         Err(IpProcessorError::InvalidInput)
     }
 
-    pub fn generate_ips(
-        input: IpInput,
-        include_all: bool,
-        max_ips: usize,
-    ) -> Vec<IpAddr> {
+    pub fn generate_ips(input: IpInput, include_all: bool, max_ips: usize) -> Vec<IpAddr> {
         match input {
             IpInput::Single(ip) => vec![ip],
-            IpInput::Cidr(network) => {
-                Self::generate_cidr_ips(network, include_all, max_ips)
-            }
-            IpInput::Range((start, end)) => {
-                Self::generate_range_ips(start, end, max_ips)
-            }
+            IpInput::Cidr(network) => Self::generate_cidr_ips(network, include_all, max_ips),
+            IpInput::Range((start, end)) => Self::generate_range_ips(start, end, max_ips),
         }
     }
 
@@ -118,11 +111,7 @@ impl IpProcessor {
         ips
     }
 
-    fn generate_range_ips(
-        start: IpAddr,
-        end: IpAddr,
-        max_ips: usize,
-    ) -> Vec<IpAddr> {
+    fn generate_range_ips(start: IpAddr, end: IpAddr, max_ips: usize) -> Vec<IpAddr> {
         let mut ips = Vec::new();
         let mut current = start;
         let mut count = 0;
@@ -169,6 +158,55 @@ impl IpProcessor {
         match TcpStream::connect_timeout(&(ip, port).into(), timeout) {
             Ok(_) => true,
             Err(_) => false,
+        }
+    }
+
+    pub fn single_ip_test(ip: IpAddr, timeout: Duration) -> Vec<u64> {
+        let mut results = Vec::new();
+        for _ in 0..10 {
+            let start = std::time::Instant::now();
+            if TcpStream::connect_timeout(&(ip, 80).into(), timeout).is_ok() {
+                let duration = start.elapsed().as_millis() as u64;
+                results.push(duration);
+            } else {
+                results.push(0);
+            }
+        }
+        results
+    }
+
+    pub fn draw_ping_graph(results: &[u64]) -> String {
+        let max = *results.iter().max().unwrap_or(&1);
+        let scale = 10.0 / max as f64;
+
+        results
+            .iter()
+            .map(|&val| {
+                let height = (val as f64 * scale).round() as usize;
+                format!("{:>4}ms |{}", val, "▇".repeat(height))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    pub async fn single_ip_test_once(ip: IpAddr, timeout: Duration) -> Result<u64, IpProcessorError> {
+        // 如果是本地地址，直接返回1ms延迟
+        if let Ok(local_ip) = local_ip_address::local_ip() {
+            if ip == local_ip {
+                return Ok(1);
+            }
+        }
+
+        // 使用surge-ping进行ICMP ping
+        let payload = [0; 56];
+        let client = surge_ping::Client::new(&Default::default())?;
+        let identifier = surge_ping::PingIdentifier(rand::random());
+        let mut pinger = client.pinger(ip.into(), identifier).await;
+        let sequence = surge_ping::PingSequence(rand::random());
+        match tokio::time::timeout(timeout, pinger.ping(sequence, &payload)).await {
+            Ok(Ok((_, duration))) => Ok(duration.as_millis() as u64),
+            Ok(Err(_)) => Ok(0),
+            Err(_) => Ok(0)
         }
     }
 }

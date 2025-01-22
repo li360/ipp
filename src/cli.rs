@@ -47,4 +47,8 @@ pub struct Cli {
     /// 使用端口检测代替ping测试
     #[arg(short = 'p', long = "port")]
     pub port: Option<u16>,
+
+    /// 对单个IP进行测试并显示模拟曲线
+    #[arg(short = 's', long = "single")]
+    pub single: bool,
 }

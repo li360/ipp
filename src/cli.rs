@@ -44,9 +44,9 @@ pub struct Cli {
     #[arg(short = 'o', long = "timeout", default_value_t = 1000)]
     pub timeout: u64,
 
-    /// 使用端口检测代替ping测试
+    /// 使用端口检测代替ping测试（支持逗号分隔的多个端口，如80,443）
     #[arg(short = 'p', long = "port")]
-    pub port: Option<u16>,
+    pub port: Option<String>,
 
     /// 对单个IP进行测试并显示模拟曲线
     #[arg(short = 's', long = "single")]

@@ -119,31 +119,42 @@ async fn main() {
             IpInput::Cidr(network) => network.ip(),
             IpInput::Range((start, _)) => start,
         };
-        
+
         // 如果指定了端口，优先进行端口测试
-        if let Some(port) = args.port {
+        if let Some(ports_str) = &args.port {
             println!("测试IP地址: {}", ip);
-            match tokio::time::timeout(
-                Duration::from_millis(args.timeout),
-                tokio::net::TcpStream::connect((ip, port)),
-            )
-            .await
-            {
-                Ok(Ok(_)) => {
-                    println!("{}", format!("端口 {} 开放", port).green());
-                    vec![(ip, Some(()))]
-                }
-                _ => {
-                    println!("{}", format!("端口 {} 关闭", port).red());
-                    vec![(ip, None)]
+            let ports: Vec<u16> = ports_str
+                .split(',')
+                .filter_map(|s| s.trim().parse().ok())
+                .collect();
+
+            let mut port_status = Vec::new();
+            for port in ports {
+                match tokio::time::timeout(
+                    Duration::from_millis(args.timeout),
+                    tokio::net::TcpStream::connect((ip, port)),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {
+                        println!("{}", format!("端口 {} 开放", port).green());
+                        port_status.push(Some(port));
+                    }
+                    _ => {
+                        println!("{}", format!("端口 {} 关闭", port).red());
+                        port_status.push(None);
+                    }
                 }
             }
+            vec![(ip, port_status)]
         } else {
             // 没有指定端口时进行ping测试
             println!("测试单个IP地址: {}", ip);
             let mut all_timeout = true;
             for _i in 0..10 {
-                match IpProcessor::single_ip_test_once(ip, Duration::from_millis(args.timeout)).await {
+                match IpProcessor::single_ip_test_once(ip, Duration::from_millis(args.timeout))
+                    .await
+                {
                     Ok(result) if result > 0 => {
                         all_timeout = false;
                         println!("{}", format!("{:4}ms", result).green());
@@ -158,10 +169,15 @@ async fn main() {
             if all_timeout {
                 vec![]
             } else {
-                vec![(ip, Some(()))]
+                vec![(ip, vec![Some(0)])]
             }
         }
-    } else if let Some(port) = args.port {
+    } else if let Some(ports_str) = &args.port {
+        let ports: Vec<u16> = ports_str
+            .split(',')
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+
         if args.single {
             // 单IP模式进行端口测试
             let ip = match ip_input {
@@ -172,24 +188,32 @@ async fn main() {
                 }
             };
             println!("测试IP地址: {}", ip);
-            let result = match tokio::time::timeout(
-                Duration::from_millis(args.timeout),
-                tokio::net::TcpStream::connect((ip, port)),
-            )
-            .await
-            {
-                Ok(Ok(_)) => {
-                    println!("{}", format!("端口 {} 开放", port).green());
-                    vec![(ip, Some(()))]
+            let mut port_status = Vec::new();
+            for port in ports {
+                match tokio::time::timeout(
+                    Duration::from_millis(args.timeout),
+                    tokio::net::TcpStream::connect((ip, port)),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {
+                        println!("{}", format!("端口 {} 开放", port).green());
+                        port_status.push(Some(port));
+                    }
+                    _ => {
+                        println!("{}", format!("端口 {} 关闭", port).red());
+                        port_status.push(None);
+                    }
                 }
-                _ => {
-                    println!("{}", format!("端口 {} 关闭", port).red());
-                    vec![(ip, None)]
-                }
-            };
-            result
+            }
+            vec![(ip, port_status)]
         } else {
-            perform_port_tests(&ips, port, args.threads, args.timeout).await
+            // 多IP模式进行端口测试
+            let ports = Arc::new(ports);
+            let port_results =
+                    perform_port_tests(&ips, &ports, args.threads, args.timeout).await;
+            let all_results = port_results;
+            all_results
         }
     } else if !args.no_ping {
         // 默认超时时间设置为1ms
@@ -200,7 +224,7 @@ async fn main() {
         };
         perform_ping_tests(&ips, args.no_retry, args.retries, args.threads, timeout).await
     } else {
-        ips.iter().map(|&ip| (ip, None)).collect()
+        ips.iter().map(|&ip| (ip, vec![None])).collect()
     };
 
     // 控制输出宽度打印结果
@@ -215,7 +239,7 @@ async fn main() {
 
         // 无参数时只显示可ping通的地址
         if !args.include_all {
-            if let Some(_) = result {
+            if !result.is_empty() && result.iter().any(|x| x.is_some()) {
                 if count % args.width == 0 && count != 0 {
                     println!();
                 }
@@ -231,15 +255,14 @@ async fn main() {
             if count % args.width == 0 && count != 0 {
                 println!();
             }
-            match result {
-                Some(_) => {
-                    if stdout().is_terminal() {
-                        print!("{} ", ip.to_string().green());
-                    } else {
-                        print!("{} ", ip);
-                    }
+            if !result.is_empty() && result.iter().any(|x| x.is_some()) {
+                if stdout().is_terminal() {
+                    print!("{} ", ip.to_string().green());
+                } else {
+                    print!("{} ", ip);
                 }
-                None => print!("{} ", ip),
+            } else {
+                print!("{} ", ip);
             }
             count += 1;
         }
@@ -256,7 +279,7 @@ async fn perform_ping_tests(
     retries: u32,
     threads: usize,
     timeout: u64,
-) -> Vec<(IpAddr, Option<()>)> {
+) -> Vec<(IpAddr, Vec<Option<u16>>)> {
     use futures::stream::StreamExt;
     use tokio::sync::Semaphore;
 
@@ -271,10 +294,11 @@ async fn perform_ping_tests(
             let _permit = permit.acquire().await;
             use std::time::Duration;
             let _retries = if no_retry { 0 } else { retries };
-            let result = match IpProcessor::single_ip_test_once(ip, Duration::from_millis(timeout)).await {
-                Ok(result) if result > 0 => (ip, Some(())),
-                _ => (ip, None),
-            };
+            let result =
+                match IpProcessor::single_ip_test_once(ip, Duration::from_millis(timeout)).await {
+                    Ok(result) if result > 0 => (ip, vec![Some(result as u16)]),
+                    _ => (ip, vec![None]),
+                };
             // 打印进度
             print!(".");
             std::io::stdout().flush().unwrap();
@@ -295,10 +319,10 @@ async fn perform_ping_tests(
 // 执行端口检测
 async fn perform_port_tests(
     ips: &[IpAddr],
-    port: u16,
+    ports: &[u16],
     threads: usize,
     timeout: u64,
-) -> Vec<(IpAddr, Option<()>)> {
+) -> Vec<(IpAddr, Vec<Option<u16>>)> {
     use futures::stream::StreamExt;
     use tokio::sync::Semaphore;
     use tokio::time::Duration;
@@ -308,34 +332,60 @@ async fn perform_port_tests(
 
     // 初始化结果向量，保持顺序
     for &ip in ips {
-        results.push((ip, None));
+        results.push((ip, vec![None; ports.len()]));
     }
 
+    let ports = Arc::new(ports.to_vec());
     let futures = ips.iter().enumerate().map(|(idx, &ip)| {
         let permit = semaphore.clone();
+        let ports = Arc::clone(&ports);
         async move {
             let _permit = permit.acquire().await;
-            let result = match tokio::time::timeout(
+
+            // 使用tokio::join!同时测试多个端口
+            let port_status = test_ports(ip, &ports, timeout).await;
+
+            print!(".");
+            std::io::stdout().flush().unwrap();
+            (idx, port_status)
+        }
+    });
+
+    let mut stream = futures::stream::iter(futures).buffer_unordered(threads);
+    while let Some((idx, port_results)) = stream.next().await {
+        results[idx].1 = port_results;
+    }
+    println!(); // 进度点后换行
+
+    results
+}
+
+// 测试端口
+async fn test_ports(ip: IpAddr, ports: &Arc<Vec<u16>>, timeout: u64) -> Vec<Option<u16>> {
+    let mut handles = Vec::new();
+    
+    for port in ports.iter() {
+        let ip = ip.clone();
+        let port = *port;
+        let handle = tokio::spawn(async move {
+            match tokio::time::timeout(
                 Duration::from_millis(timeout),
                 tokio::net::TcpStream::connect((ip, port)),
             )
             .await
             {
-                Ok(Ok(_)) => Some(()),
+                Ok(Ok(_)) => Some(port),
                 _ => None,
-            };
-            print!(".");
-            std::io::stdout().flush().unwrap();
-            (idx, result)
-        }
-    });
-
-    let mut stream = futures::stream::iter(futures).buffer_unordered(threads);
-    while let Some((idx, result)) = stream.next().await {
-        results[idx].1 = result;
+            }
+        });
+        handles.push(handle);
     }
-    println!(); // 进度点后换行
-
+    
+    let mut results = Vec::new();
+    for handle in handles {
+        results.push(handle.await.unwrap());
+    }
+    
     results
 }
 
